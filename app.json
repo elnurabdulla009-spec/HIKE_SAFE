@@ -11,7 +11,9 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "HIKE SAFE records your position during an active hike so your trusted contact can be told where you were.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "HIKE SAFE keeps recording your hike while the screen is off. Tracking stops when you finish the hike.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location"
+        ]
       }
     },
     "android": {
@@ -33,7 +35,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "expo-status-bar"
     ]
   }
 }
