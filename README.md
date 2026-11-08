@@ -11,7 +11,7 @@ HIKE SAFE is a mobile app for hikers in the Almaty mountains. Before a hike, the
 | Stage | Scope | State |
 |---|---|---|
 | 1 | Risk engine, incident rules, database schema + Row Level Security, app skeleton | ✅ done |
-| 2 | Sign-in, trusted contacts, hike plan form | ⏳ next |
+| 2 | Sign-in, trusted contacts, hike plan form (backend: `realApi` ✅, screens ⏳) | ⏳ in progress |
 | 3 | Real background GPS → local SQLite → offline sync queue | |
 | 4 | Live risk screen, manual SOS, finish hike | |
 | 5 | Server: overdue check every minute + Telegram/SMS alert to contact | |
@@ -83,6 +83,32 @@ npx expo start    # opens the app
 ```
 
 Background GPS does not work in Expo Go. From stage 3 on, you need a development build: `npx expo run:ios` or `npx expo run:android`.
+
+## Using the real backend (Supabase)
+
+By default the app runs on the **mock** backend (`src/data/mockApi.ts`), so nobody needs a server to build screens.
+To use Supabase:
+
+1. Run both migrations in the Supabase **SQL Editor**, in order:
+   - `supabase/migrations/20261108000000_init.sql`: tables, RLS, triggers, overdue function
+   - `supabase/migrations/20261108000100_grants.sql`: explicit privileges (least privilege)
+2. Enable **pg_cron** (Database → Extensions) and schedule the overdue check:
+   ```sql
+   select cron.schedule('escalate-overdue', '* * * * *', $$select public.escalate_overdue_hikes()$$);
+   ```
+3. Make sign-in emails contain a **6-digit code** instead of only a link.
+   Go to **Authentication → Emails → Templates → Magic Link** and put `{{ .Token }}` in the body, for example:
+   ```html
+   <h2>Your HIKE SAFE code</h2>
+   <p>Enter this code in the app: <strong>{{ .Token }}</strong></p>
+   <p>If you did not request it, ignore this email.</p>
+   ```
+   The built-in email sender has a low hourly limit. That is fine for development; production needs custom SMTP.
+4. In `.env` set the URL and publishable key, plus `EXPO_PUBLIC_API=real`. Then restart `npx expo start`.
+
+What is real in stage 2: email-code sign-in, trusted contacts, starting and finishing hikes, live risk status computed from
+server GPS points, and SOS that creates the single incident for the hike. Not yet: background GPS, offline queue,
+and notifying the contact (stages 3 and 5).
 
 ## Testing the database rules
 
