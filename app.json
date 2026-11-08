@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "HIKE SAFE",
+    "slug": "hike-safe",
+    "scheme": "hikesafe",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "kz.hikesafe.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "HIKE SAFE records your position during an active hike so your trusted contact can be told where you were.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "HIKE SAFE keeps recording your hike while the screen is off. Tracking stops when you finish the hike.",
+        "UIBackgroundModes": ["location"]
+      }
+    },
+    "android": {
+      "package": "kz.hikesafe.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ]
+  }
+}
