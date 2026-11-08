@@ -64,7 +64,7 @@ npx expo install expo-router expo-linking expo-constants expo-status-bar \
   react-native-safe-area-context react-native-screens \
   expo-location expo-task-manager expo-sqlite expo-battery \
   @supabase/supabase-js @react-native-async-storage/async-storage react-native-url-polyfill
-npm install -D typescript @types/react
+npm install -D typescript @types/react @types/node
 
 # 2. Backend
 cp .env.example .env     # then paste URL + anon key from your Supabase project
