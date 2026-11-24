@@ -28,7 +28,9 @@ Stack: Expo SDK 58 (React Native, TypeScript, expo-router), Supabase (Postgres +
 - `src/data/mockApi.ts`: in-memory backend, sign-in code `123456`, `mockControls.setScenario(...)`.
 - `src/data/realApi.ts`: Supabase implementation.
 - `src/data/index.ts`: `EXPO_PUBLIC_API=real` selects Supabase. The default is mock.
+- `src/data/local/`: on-device SQLite (`schema.ts` migrations, `pointSink.ts` GPS fixes, `trackingState.ts`). Tests run the same SQL on `node:sqlite`.
 - `src/lib/supabase.ts`: lazy client. `src/lib/uuid.ts`: device-side IDs.
+- `src/lib/locationTask.ts`: background GPS task, defined in the global scope via the root `index.js` (package.json `main`).
 - `supabase/migrations/`: schema, RLS, triggers, `escalate_overdue_hikes()`, explicit grants. Already applied to the live project.
 
 ## Safety rules (from the defended project — never break them)
@@ -52,4 +54,6 @@ that the teammate reviews. Run `npm test` and `npx tsc --noEmit` before every PR
 - Open:
   - Supabase free tier emails contain only a link, not the 6-digit code. Custom SMTP (a project Gmail + app password) is needed so the Magic Link template can use `{{ .Token }}`.
   - Demeu: sign-in screen (`app/sign-in.tsx`) on the mock, then contacts, plan form, live hike screen.
-- Next backend stage 3: background GPS (expo-location + expo-task-manager), then local SQLite, then an offline sync queue.
+- Stage 3a (branch `backend/background-gps`): background GPS → local SQLite; `realApi` evaluates risk from local fixes.
+  Needs a dev build (`npx expo run:ios --device`); Expo Go cannot run background location.
+- Next backend stage 3b: upload unsynced fixes (`synced_at IS NULL`) to Supabase, then an offline queue for hikes/incidents.

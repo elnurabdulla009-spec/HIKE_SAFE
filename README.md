@@ -12,7 +12,7 @@ HIKE SAFE is a mobile app for hikers in the Almaty mountains. Before a hike, the
 |---|---|---|
 | 1 | Risk engine, incident rules, database schema + Row Level Security, app skeleton | ✅ done |
 | 2 | Sign-in, trusted contacts, hike plan form (backend: `realApi` ✅, screens ⏳) | ⏳ in progress |
-| 3 | Real background GPS → local SQLite → offline sync queue | |
+| 3 | Real background GPS → local SQLite (3a ✅) → offline sync queue (3b) | ⏳ in progress |
 | 4 | Live risk screen, manual SOS, finish hike | |
 | 5 | Server: overdue check every minute + Telegram/SMS alert to contact | |
 | 6 | Real-device field tests (battery, GPS gaps), store builds | |
@@ -27,7 +27,7 @@ These are the rules the project was defended on. Each one is enforced in code an
 | **One hike. One incident.** Repeated signals update the same incident. | `src/domain/incident.ts` + `UNIQUE(hike_id)` in the database |
 | **Resolved means resolved.** A closed hike or incident never escalates again. | engine + incident logic + database trigger |
 | **A queue is not a rescue.** "Queued" is never shown as "delivered". | `advanceDelivery()`; only the server can set `contact_notified_at` |
-| **Local first.** Every record is written on the phone first and synced later. | device-generated IDs → idempotent upserts |
+| **Local first.** Every record is written on the phone first and synced later. | `src/data/local/pointSink.ts` (GPS → SQLite); device-generated IDs → idempotent upserts |
 
 All risk thresholds in `THRESHOLDS` are **preliminary assumptions**. Field testing has to measure false alarms and missed incidents, and the thresholds must be revised from those results.
 
@@ -48,9 +48,13 @@ The server exists for one reason: **if the phone is dead or offline, it cannot s
 
 ```
 app/                     screens (expo-router)
+index.js                 entry: defines the background GPS task, then starts expo-router
 src/domain/              safety logic: pure TypeScript, no React, fully tested
-  types.ts  geo.ts  risk.ts  incident.ts  risk.test.ts
+  types.ts  geo.ts  risk.ts  incident.ts  tracking.ts
+src/data/                api contract, mock, real Supabase backend
+  local/                 on-device SQLite: schema, PointSink (GPS fixes), tracking state
 src/lib/supabase.ts      backend client
+src/lib/locationTask.ts  background GPS task (expo-location + expo-task-manager)
 supabase/migrations/     database schema, RLS policies, triggers, overdue function
 supabase/tests/          database security tests (run on plain Postgres)
 ```
@@ -78,11 +82,25 @@ select cron.schedule('escalate-overdue', '* * * * *', $$select public.escalate_o
 
 ```bash
 # 3. Run
-npm test          # risk engine tests (22)
-npx expo start    # opens the app
+npm test          # all unit tests
+npx expo start    # opens the app (mock backend works in Expo Go)
 ```
 
-Background GPS does not work in Expo Go. From stage 3 on, you need a development build: `npx expo run:ios` or `npx expo run:android`.
+### Background GPS needs a development build
+
+Background location does **not** work in Expo Go. With the real backend you need a development build:
+
+```bash
+npx expo run:ios --device      # iPhone over USB: needs Xcode and an Apple ID (free account is fine)
+npx expo run:android           # Android phone with USB debugging
+```
+
+Then start a hike, allow location **"Always"**, and lock the screen. Fixes are written to the phone's SQLite
+first (`hikesafe.db`), so they are recorded in airplane mode too. In the iOS Simulator you can use
+**Features → Location → City Walk** to simulate movement.
+
+Known limits of stage 3a: fixes are not uploaded to Supabase yet (stage 3b), and if the user force-quits the
+app on iOS, the OS stops background GPS. The server-side overdue check still works in that case.
 
 ## Using the real backend (Supabase)
 
@@ -106,9 +124,9 @@ To use Supabase:
    The built-in email sender has a low hourly limit. That is fine for development; production needs custom SMTP.
 4. In `.env` set the URL and publishable key, plus `EXPO_PUBLIC_API=real`. Then restart `npx expo start`.
 
-What is real in stage 2: email-code sign-in, trusted contacts, starting and finishing hikes, live risk status computed from
-server GPS points, and SOS that creates the single incident for the hike. Not yet: background GPS, offline queue,
-and notifying the contact (stages 3 and 5).
+What is real now: email-code sign-in, trusted contacts, starting and finishing hikes, background GPS stored on the
+phone, live risk status computed from those local fixes, and SOS that creates the single incident for the hike.
+Not yet: uploading fixes and the offline queue (stage 3b), and notifying the contact (stage 5).
 
 ## Testing the database rules
 

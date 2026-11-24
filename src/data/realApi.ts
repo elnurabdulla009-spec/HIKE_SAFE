@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Real backend: Supabase (Auth + Postgres with Row Level Security).
 //
-// Stage 2 scope: sign-in, contacts, hikes, live status from server data, SOS.
-// Stage 3 will add: background GPS → local SQLite → offline sync queue,
-//                   so getLiveStatus will read local data and work offline.
+// Stage 2: sign-in, contacts, hikes, incidents, SOS on the server.
+// Stage 3a (now): background GPS → local SQLite. Risk is evaluated from the fixes stored
+//                 ON THE PHONE (local first), so GPS state works without network.
+// Stage 3b (next): upload unsynced fixes + offline queue for hikes and incidents.
 //
 // Security notes:
 // - The anon/publishable key is public by design; RLS decides which rows a user sees.
@@ -12,16 +13,10 @@
 import { uuidv4 } from '../lib/uuid.ts';
 import { applyEvaluation } from '../domain/incident.ts';
 import { evaluateRisk } from '../domain/risk.ts';
-import type {
-  Hike,
-  HikeStatus,
-  Incident,
-  LatLng,
-  LocationSample,
-  RiskLevel,
-  RiskReason,
-} from '../domain/types.ts';
+import type { Hike, HikeStatus, Incident, LatLng, RiskLevel, RiskReason } from '../domain/types.ts';
+import { ensureTracking, requestTrackingPermissions, startTracking, stopTracking } from '../lib/locationTask.ts';
 import { getSupabase } from '../lib/supabase.ts';
+import { getPointSink } from './local/db.ts';
 import {
   ApiError,
   type HikePlan,
@@ -45,12 +40,6 @@ interface HikeRow {
   started_at: string;
   planned_return_at: string;
   status: HikeStatus;
-}
-interface PointRow {
-  recorded_at: string;
-  lat: number;
-  lng: number;
-  accuracy_m: number | null;
 }
 interface IncidentRow {
   id: string;
@@ -79,13 +68,6 @@ const toHike = (r: HikeRow): Hike => ({
   startedAt: Date.parse(r.started_at),
   plannedReturnAt: Date.parse(r.planned_return_at),
   status: r.status,
-});
-
-const toSample = (r: PointRow): LocationSample => ({
-  lat: r.lat,
-  lng: r.lng,
-  timestamp: Date.parse(r.recorded_at),
-  accuracy: r.accuracy_m,
 });
 
 const toIncident = (r: IncidentRow): Incident => ({
@@ -147,21 +129,7 @@ export function createRealApi(): HikeSafeApi {
     ) as IncidentRow | null;
   }
 
-  async function fetchSamples(hikeId: string, now: number): Promise<LocationSample[]> {
-    const rows = check(
-      await db()
-        .from('location_points')
-        .select('recorded_at, lat, lng, accuracy_m')
-        .eq('hike_id', hikeId)
-        .gte('recorded_at', new Date(now - SAMPLE_WINDOW_MS).toISOString())
-        .order('recorded_at', { ascending: true })
-        .limit(1000),
-      'Load GPS points',
-    ) as PointRow[];
-    return rows.map(toSample);
-  }
-
-  async function getActiveHike(): Promise<Hike | null> {
+  async function fetchActiveHike(): Promise<Hike | null> {
     await requireUserId();
     const row = check(
       await db()
@@ -176,12 +144,29 @@ export function createRealApi(): HikeSafeApi {
     return row ? toHike(row) : null;
   }
 
+  /** Active hike for the screens. Also restarts GPS if the OS stopped it (reboot, update...). */
+  async function getActiveHike(): Promise<Hike | null> {
+    const hike = await fetchActiveHike();
+    if (hike) {
+      await ensureTracking(hike.id).catch((e) =>
+        console.warn('[gps] could not resume tracking:', e instanceof Error ? e.message : e),
+      );
+    }
+    return hike;
+  }
+
   /** Evaluates risk and writes the (single) incident back if it was created or changed. */
   async function syncStatus(hikeId: string, opts: { sos?: boolean } = {}): Promise<LiveStatus> {
     const userId = await requireUserId();
     const now = Date.now();
     const hike = await fetchHike(hikeId);
-    const [samples, currentRow] = await Promise.all([fetchSamples(hikeId, now), fetchIncident(hikeId)]);
+    // LOCAL FIRST: GPS fixes come from the phone's SQLite, not from the server.
+    const sink = await getPointSink();
+    const [samples, queuedEvents, currentRow] = await Promise.all([
+      sink.recent(hikeId, now - SAMPLE_WINDOW_MS),
+      sink.unsyncedCount(hikeId),
+      fetchIncident(hikeId),
+    ]);
     const current = currentRow ? toIncident(currentRow) : null;
 
     const sosActive = opts.sos === true || (current?.status === 'OPEN' && current.reasons.includes('MANUAL_SOS'));
@@ -224,8 +209,8 @@ export function createRealApi(): HikeSafeApi {
       hike,
       evaluation,
       incident,
-      network: 'ONLINE', // stage 3: real connectivity detection + offline queue
-      queuedEvents: 0,
+      network: 'ONLINE', // stage 3b: real connectivity detection + offline queue
+      queuedEvents, // honest: fixes stored on the phone that the server has not got yet
       lastFixAt: samples.at(-1)?.timestamp ?? null,
     };
   }
@@ -301,7 +286,9 @@ export function createRealApi(): HikeSafeApi {
 
       const { count } = await db().from('trusted_contacts').select('id', { count: 'exact', head: true });
       if (!count) throw new ApiError('NO_CONTACT', 'Add a trusted contact first.');
-      if (await getActiveHike()) throw new ApiError('HIKE_ALREADY_ACTIVE', 'Finish your current hike first.');
+      if (await fetchActiveHike()) throw new ApiError('HIKE_ALREADY_ACTIVE', 'Finish your current hike first.');
+      // Ask for GPS BEFORE creating the hike: no hike on the server that nobody can track.
+      await requestTrackingPermissions();
 
       const row = check(
         await db()
@@ -319,11 +306,24 @@ export function createRealApi(): HikeSafeApi {
           .single(),
         'Start hike',
       ) as HikeRow;
+
+      try {
+        await startTracking(row.id);
+      } catch (e) {
+        // A hike we cannot record must not look ACTIVE (the server would escalate it later).
+        await stopTracking().catch(() => {});
+        await db().from('hikes').update({ status: 'CANCELLED' }).eq('id', row.id).eq('status', 'ACTIVE');
+        throw e;
+      }
       return toHike(row);
     },
 
     async finishHike(hikeId) {
       await requireUserId();
+      // Stop GPS FIRST and locally: tracking must end even if the network call below fails.
+      await stopTracking().catch((e) =>
+        console.warn('[gps] could not stop tracking:', e instanceof Error ? e.message : e),
+      );
       const now = new Date().toISOString();
       check(
         await db().from('hikes').update({ status: 'COMPLETED', completed_at: now }).eq('id', hikeId).eq('status', 'ACTIVE'),
