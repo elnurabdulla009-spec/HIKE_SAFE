@@ -9,7 +9,7 @@
 // - The anon/publishable key is public by design; RLS decides which rows a user sees.
 // - The device never sets `contact_notified_at`; a DB trigger enforces this.
 // ─────────────────────────────────────────────────────────────────────────────
-import * as Crypto from 'expo-crypto';
+import { uuidv4 } from '../lib/uuid.ts';
 import { applyEvaluation } from '../domain/incident.ts';
 import { evaluateRisk } from '../domain/risk.ts';
 import type {
@@ -186,7 +186,7 @@ export function createRealApi(): HikeSafeApi {
 
     const sosActive = opts.sos === true || (current?.status === 'OPEN' && current.reasons.includes('MANUAL_SOS'));
     const evaluation = evaluateRisk({ now, hike, samples, batteryLevel: null, sosActive });
-    const next = applyEvaluation(hike, current, evaluation, () => Crypto.randomUUID());
+    const next = applyEvaluation(hike, current, evaluation, () => uuidv4());
 
     let incident = current;
     if (next && !current) {
@@ -307,7 +307,7 @@ export function createRealApi(): HikeSafeApi {
         await db()
           .from('hikes')
           .insert({
-            id: Crypto.randomUUID(), // generated on the device: safe to retry offline later (stage 3)
+            id: uuidv4(), // generated on the device: safe to retry offline later (stage 3)
             user_id: userId,
             destination,
             route: plan.route,
