@@ -9,3 +9,11 @@ android/
 expo-env.d.ts
 .DS_Store
 supabase/.temp/
+
+# Playwright output (screenshots in e2e/screenshots/ ARE committed)
+test-results/
+playwright-report/
+blob-report/
+
+# Local Claude Code settings
+.claude/
