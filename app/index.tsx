@@ -4,9 +4,12 @@ import { ActivityIndicator, View } from 'react-native';
 import { api, type TrustedContact } from '../src/data/index.ts';
 import type { Hike } from '../src/domain/types.ts';
 import { Body, Button, Card, Screen, Title, colors } from '../src/components/ui.tsx';
+import { mockApi, mockControls } from '../src/data/mockApi.ts';
+import { usePilot } from '../src/pilot/usePilot.ts';
 
 // Home: decides where the user should be, and shows the next step.
 export default function Home() {
+  const pilot = usePilot();
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState<TrustedContact[]>([]);
   const [past, setPast] = useState<Hike[]>([]);
@@ -61,6 +64,14 @@ export default function Home() {
 
       <Body muted>HIKE SAFE does not call 112 and cannot guarantee that alerts are delivered. In an emergency, call 112 yourself.</Body>
       <Button title="Sign out" variant="secondary" onPress={async () => { await api.signOut(); router.replace('/sign-in'); }} />
+
+      {/* Observer only (turned on in Pilot mode). Pilot logs are kept. */}
+      {api === mockApi && pilot.showDemoPanel && (
+        <Card>
+          <Body>Demo / pilot: clear all demo data (sign-in, contacts, hikes) for the next participant. Pilot logs are kept.</Body>
+          <Button title="Reset demo" variant="secondary" onPress={() => { mockControls.reset(); router.replace('/sign-in'); }} />
+        </Card>
+      )}
     </Screen>
   );
 }

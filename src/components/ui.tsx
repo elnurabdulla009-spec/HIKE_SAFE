@@ -1,5 +1,6 @@
 // Shared building blocks for HIKE SAFE screens: colors, buttons, inputs.
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { logPilot } from '../pilot/pilotLog.ts';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 
 export const colors = {
@@ -74,6 +75,8 @@ export function Button({ title, onPress, variant = 'primary', busy, disabled }: 
 }
 
 export function ErrorText({ message }: { message: string | null }) {
+  // Pilot: every error a participant SEES is logged (scrubbed, only while a session runs).
+  useEffect(() => { if (message) logPilot('ERROR', { detail: message }); }, [message]);
   if (!message) return null;
   return <Text style={styles.error}>{message}</Text>;
 }

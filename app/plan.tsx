@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { api, ApiError } from '../src/data/index.ts';
 import { Body, Button, Chip, ErrorText, Field, Screen, Title } from '../src/components/ui.tsx';
 import { useSignedIn } from '../src/components/useSignedIn.ts';
+import { finishTaskIfRunning } from '../src/pilot/pilotLog.ts';
 
 const DESTINATIONS = ['Medeu → Shymbulak', 'Big Almaty Lake', 'Kok-Zhailau', 'Furmanov peak'];
 const DURATIONS = [2, 4, 6, 8]; // hours from now
@@ -23,6 +24,7 @@ export default function Plan() {
     setBusy(true);
     try {
       const hike = await api.startHike({ destination, route: [], plannedReturnAt: returnAt });
+      finishTaskIfRunning('A'); // Pilot Task A "plan a hike" is done when the hike starts.
       router.replace({ pathname: '/live', params: { id: hike.id } });
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'Could not start the hike.');
