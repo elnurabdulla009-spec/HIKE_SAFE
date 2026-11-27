@@ -51,11 +51,29 @@ function findHike(hikeId: string): Hike {
   return hike;
 }
 
+/**
+ * Demo: "long rest" and "GPS lost" need history. On a hike that just started,
+ * pretend it began 3 hours ago so these scenarios show up immediately.
+ * The risk engine must see the SAME start time as the fake GPS history,
+ * otherwise its "just started" grace period hides GPS_UNKNOWN.
+ */
+function demoStartedAt(hike: Hike, now: number): number {
+  const needsHistory = state.scenario === 'RESTING' || state.scenario === 'GPS_LOST';
+  return needsHistory ? Math.min(hike.startedAt, now - 180 * MIN) : hike.startedAt;
+}
+
+/** OVERDUE and OFFLINE pretend 45 minutes passed after the planned return. */
+function demoNow(hike: Hike): number {
+  const late = state.scenario === 'OVERDUE' || state.scenario === 'OFFLINE';
+  return late ? Math.max(Date.now(), hike.plannedReturnAt + 45 * MIN) : Date.now();
+}
+
 /** Generates fake GPS samples that match the current scenario. */
 function fakeSamples(hike: Hike, now: number): LocationSample[] {
   const start = hike.route[0] ?? { lat: 43.1575, lng: 77.0587 }; // Medeu
   const out: LocationSample[] = [];
-  const minutes = Math.max(1, Math.floor((now - hike.startedAt) / MIN));
+  const from = demoStartedAt(hike, now);
+  const minutes = Math.max(1, Math.floor((now - from) / MIN));
   const lastMinute = state.scenario === 'GPS_LOST' ? Math.max(0, minutes - 40) : minutes;
   for (let m = 0; m <= lastMinute; m++) {
     const resting = state.scenario === 'RESTING' && m > lastMinute - 90;
@@ -63,7 +81,7 @@ function fakeSamples(hike: Hike, now: number): LocationSample[] {
     out.push({
       lat: start.lat - step * 0.00005,
       lng: start.lng,
-      timestamp: hike.startedAt + m * MIN,
+      timestamp: from + m * MIN,
       accuracy: 8,
     });
   }
@@ -71,12 +89,13 @@ function fakeSamples(hike: Hike, now: number): LocationSample[] {
 }
 
 function buildStatus(hike: Hike): LiveStatus {
-  // In OVERDUE we pretend 45 minutes passed after the planned return.
-  const now = state.scenario === 'OVERDUE' ? Math.max(Date.now(), hike.plannedReturnAt + 45 * MIN) : Date.now();
+  // OFFLINE = the typical mountain case: no network AND late, so an alert
+  // exists but can only be queued on the phone (a queue is not a rescue).
+  const now = demoNow(hike);
   const samples = fakeSamples(hike, now);
   const evaluation = evaluateRisk({
     now,
-    hike,
+    hike: { ...hike, startedAt: demoStartedAt(hike, now) },
     samples,
     batteryLevel: state.scenario === 'LOW_BATTERY' ? 0.08 : 0.76,
     sosActive: state.sos.has(hike.id),
