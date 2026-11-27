@@ -53,3 +53,17 @@ that the teammate reviews. Run `npm test` and `npx tsc --noEmit` before every PR
   - Supabase free tier emails contain only a link, not the 6-digit code. Custom SMTP (a project Gmail + app password) is needed so the Magic Link template can use `{{ .Token }}`.
   - Demeu: sign-in screen (`app/sign-in.tsx`) on the mock, then contacts, plan form, live hike screen.
 - Next backend stage 3: background GPS (expo-location + expo-task-manager), then local SQLite, then an offline sync queue.
+
+## Prototype status (2026-11-27, for the 2026-12-03 presentation)
+- Ready (branch `frontend/prototype`, mock backend): sign-in, home, contacts, plan, live screens; web version;
+  demo scenario chips on the live screen (Walking, Long rest, GPS lost, Overdue, Offline, Low battery).
+  Mock demo scenarios: RESTING/GPS_LOST fake a 3 h history; OFFLINE = no network AND 45 min late (alert is queued).
+- Online demo: https://elnurabdulla009-spec.github.io/HIKE_SAFE/ (GitHub Pages, `gh-pages` branch, mock data in memory:
+  a page reload signs you out — this is expected).
+- Run locally: `npx expo start --web` (URL ends in `/HIKE_SAFE`).
+- Tests: `npm test` (unit, incl. `src/data/mockScenarios.test.ts`), then
+  `npm run export:web && npm run test:e2e` (Playwright, Chromium; screenshots → `e2e/screenshots/`).
+  Against the live site: `E2E_BASE_URL=https://elnurabdulla009-spec.github.io/HIKE_SAFE/ npm run test:e2e`.
+- Deploy: `npm run export:web` builds `dist/` with `404.html` (deep links) and `.nojekyll` (keeps `_expo/`), then publish `dist/` to `gh-pages`.
+- After the presentation: merge the PR; switch screens to `EXPO_PUBLIC_API=real` and test with Supabase (needs custom SMTP for the
+  6-digit code); background GPS → SQLite → offline sync queue; a deploy workflow (GitHub Actions) instead of a manual `gh-pages` push.
