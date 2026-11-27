@@ -10,6 +10,7 @@
 import { advanceDelivery, applyEvaluation, resolveIncident } from '../domain/incident.ts';
 import { evaluateRisk } from '../domain/risk.ts';
 import type { Hike, Incident, LocationSample } from '../domain/types.ts';
+import { loadJson, removeKey, saveJson } from '../lib/kvStore.ts';
 import {
   ApiError,
   type HikePlan,
@@ -39,6 +40,61 @@ const state = {
   scenario: 'WALKING' as MockScenario,
   listeners: new Map<string, Set<(s: LiveStatus) => void>>(),
 };
+
+// ── Persistence: a page reload (F5) keeps the demo data ──────────────────────
+const STORAGE_KEY = 'hikesafe.mock.v1';
+const SCENARIOS: MockScenario[] = ['WALKING', 'RESTING', 'GPS_LOST', 'OVERDUE', 'OFFLINE', 'LOW_BATTERY'];
+
+interface StoredState {
+  v: 1;
+  session: Session | null;
+  contacts: TrustedContact[];
+  hikes: Hike[];
+  incidents: [string, Incident][];
+  sos: string[];
+  scenario: MockScenario;
+}
+
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null;
+
+/** Accepts stored data only if it has the expected shape; anything else → start fresh. */
+function validateStored(raw: unknown): StoredState | null {
+  if (!isObj(raw) || raw.v !== 1) return null;
+  const { session, contacts, hikes, incidents, sos, scenario } = raw;
+  if (session !== null && !(isObj(session) && typeof session.userId === 'string' && typeof session.email === 'string')) return null;
+  if (!Array.isArray(contacts) || !contacts.every((c) => isObj(c) && typeof c.id === 'string' && typeof c.name === 'string')) return null;
+  if (!Array.isArray(hikes) || !hikes.every((h) => isObj(h) && typeof h.id === 'string' && typeof h.status === 'string'
+    && typeof h.startedAt === 'number' && typeof h.plannedReturnAt === 'number' && Array.isArray(h.route))) return null;
+  if (!Array.isArray(incidents) || !incidents.every((e) => Array.isArray(e) && typeof e[0] === 'string' && isObj(e[1]) && typeof e[1].status === 'string')) return null;
+  if (!Array.isArray(sos) || !sos.every((s) => typeof s === 'string')) return null;
+  if (!SCENARIOS.includes(scenario as MockScenario)) return null;
+  return raw as unknown as StoredState;
+}
+
+function persist() {
+  const stored: StoredState = {
+    v: 1,
+    session: state.session,
+    contacts: state.contacts,
+    hikes: state.hikes,
+    incidents: [...state.incidents.entries()],
+    sos: [...state.sos],
+    scenario: state.scenario,
+  };
+  saveJson(STORAGE_KEY, stored);
+}
+
+function hydrate() {
+  const s = loadJson(STORAGE_KEY, validateStored);
+  state.session = s?.session ?? null;
+  state.contacts = s?.contacts ?? [];
+  state.hikes = s?.hikes ?? [];
+  state.incidents = new Map(s?.incidents ?? []);
+  state.sos = new Set(s?.sos ?? []);
+  state.scenario = s?.scenario ?? 'WALKING';
+}
+
+hydrate();
 
 function requireSession(): Session {
   if (!state.session) throw new ApiError('NOT_SIGNED_IN', 'Please sign in first.');
@@ -105,6 +161,7 @@ function buildStatus(hike: Hike): LiveStatus {
   if (incident) {
     incident = advanceDelivery(incident, state.scenario === 'OFFLINE' ? 'QUEUED_OFFLINE' : 'SENT_TO_SERVER');
     state.incidents.set(hike.id, incident);
+    persist();
   }
 
   const offline = state.scenario === 'OFFLINE';
@@ -141,12 +198,14 @@ export const mockApi: HikeSafeApi = {
     await delay();
     if (code !== DEMO_CODE) throw new ApiError('INVALID_CODE', 'Wrong code. (Mock code is 123456.)');
     state.session = { userId: 'mock-user', email, displayName: null };
+    persist();
     return state.session;
   },
 
   async signOut() {
     await delay(100);
     state.session = null;
+    persist();
   },
 
   async listContacts() {
@@ -162,6 +221,7 @@ export const mockApi: HikeSafeApi = {
     if (!E164.test(input.phone)) throw new ApiError('INVALID_INPUT', 'Phone must look like +77011234567.');
     const contact: TrustedContact = { id: id('contact'), name: input.name.trim(), phone: input.phone, telegramConnected: false };
     state.contacts.push(contact);
+    persist();
     return contact;
   },
 
@@ -169,6 +229,7 @@ export const mockApi: HikeSafeApi = {
     requireSession();
     await delay();
     state.contacts = state.contacts.filter((c) => c.id !== contactId);
+    persist();
   },
 
   async getActiveHike() {
@@ -193,6 +254,7 @@ export const mockApi: HikeSafeApi = {
       status: 'ACTIVE',
     };
     state.hikes.push(hike);
+    persist();
     return hike;
   },
 
@@ -204,6 +266,7 @@ export const mockApi: HikeSafeApi = {
     const incident = state.incidents.get(hikeId);
     if (incident) state.incidents.set(hikeId, resolveIncident(incident, Date.now()));
     state.sos.delete(hikeId);
+    persist();
     notify(hikeId);
   },
 
@@ -237,6 +300,7 @@ export const mockApi: HikeSafeApi = {
     const hike = findHike(hikeId);
     if (hike.status !== 'ACTIVE') throw new ApiError('NOT_FOUND', 'This hike is already closed.');
     state.sos.add(hikeId);
+    persist();
     const status = buildStatus(hike);
     notify(hikeId);
     return status.incident!;
@@ -247,11 +311,13 @@ export const mockApi: HikeSafeApi = {
 export const mockControls = {
   setScenario(s: MockScenario) {
     state.scenario = s;
+    persist();
     state.hikes.filter((h) => h.status === 'ACTIVE').forEach((h) => notify(h.id));
   },
   get scenario() {
     return state.scenario;
   },
+  /** "Reset demo": wipes ALL demo data, in memory and in storage (pilot logs are separate). */
   reset() {
     state.session = null;
     state.contacts = [];
@@ -259,5 +325,10 @@ export const mockControls = {
     state.incidents.clear();
     state.sos.clear();
     state.scenario = 'WALKING';
+    removeKey(STORAGE_KEY);
+  },
+  /** Tests only: forget memory and load again from storage, like a page reload (F5). */
+  reloadFromStorage() {
+    hydrate();
   },
 };

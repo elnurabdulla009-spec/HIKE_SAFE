@@ -1,10 +1,14 @@
-import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { Redirect, router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { api, ApiError, type LiveStatus } from '../src/data/index.ts';
-import { mockApi, mockControls, type MockScenario } from '../src/data/mockApi.ts';
-import type { DeliveryState, RiskLevel, RiskReason } from '../src/domain/types.ts';
+import { mockApi, mockControls } from '../src/data/mockApi.ts';
+import { DELIVERY_TEXT, formatDuration } from '../src/domain/contactMessage.ts';
+import type { RiskLevel, RiskReason } from '../src/domain/types.ts';
 import { Body, Button, Card, Chip, ErrorText, Screen, Title, colors } from '../src/components/ui.tsx';
+import { changeScenario, SCENARIOS } from '../src/components/scenarios.ts';
+import { logPilot } from '../src/pilot/pilotLog.ts';
+import { usePilot } from '../src/pilot/usePilot.ts';
 
 const LEVEL: Record<RiskLevel, { label: string; color: string }> = {
   LOW: { label: 'Low risk', color: colors.green },
@@ -25,44 +29,31 @@ const REASON: Record<RiskReason, string> = {
 };
 
 // Safety rule 4: a queue is not a rescue. Only CONTACT_NOTIFIED says "notified".
-const DELIVERY: Record<DeliveryState, string> = {
-  LOCAL_ONLY: 'Alert saved on this phone only. Your contact has NOT been told yet.',
-  QUEUED_OFFLINE: 'No network. Alert is queued and will be sent when the phone is online. Your contact has NOT been told yet.',
-  SENT_TO_SERVER: 'Alert reached our server. Waiting for delivery to your contact.',
-  CONTACT_NOTIFIED: 'Contact notified.',
-};
+// The texts live in src/domain/contactMessage.ts (shared with the preview, unit-tested).
 
-const SCENARIOS: { key: MockScenario; label: string }[] = [
-  { key: 'WALKING', label: 'Walking' },
-  { key: 'RESTING', label: 'Long rest' },
-  { key: 'GPS_LOST', label: 'GPS lost' },
-  { key: 'OVERDUE', label: 'Overdue' },
-  { key: 'OFFLINE', label: 'Offline' },
-  { key: 'LOW_BATTERY', label: 'Low battery' },
-];
-
-function fmtMinutes(min: number) {
-  const m = Math.abs(Math.round(min));
-  return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`;
-}
+const fmtMinutes = formatDuration;
 
 export default function Live() {
+  const pilot = usePilot();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [confirmSos, setConfirmSos] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [scenario, setScenario] = useState<MockScenario>(mockControls.scenario);
-
   const [lost, setLost] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    // After a page reload the demo data is gone (it lives in memory),
-    // so the hike no longer exists: go back to the start instead of loading forever.
+    // The hike can be gone (e.g. after "Reset demo" in another tab):
+    // go back to the start instead of loading forever.
     api.getLiveStatus(id).catch(() => setLost(true));
     return api.subscribeLiveStatus(id, setStatus);
   }, [id]);
+
+  // Coming back from Pilot mode: the observer may have reset the demo meanwhile.
+  useFocusEffect(useCallback(() => {
+    if (id) api.getLiveStatus(id).then(setStatus, () => setLost(true));
+  }, [id]));
 
   async function act(action: () => Promise<unknown>) {
     setBusy(true);
@@ -112,7 +103,9 @@ export default function Live() {
       {incident && incident.status === 'OPEN' && (
         <Card tone={incident.delivery === 'CONTACT_NOTIFIED' ? 'ok' : 'danger'}>
           <Body>Alert to your trusted contact</Body>
-          <Body muted>{DELIVERY[incident.delivery]}</Body>
+          <Body muted>{DELIVERY_TEXT[incident.delivery]}</Body>
+          <Button title="Preview what your contact sees" variant="secondary"
+            onPress={() => router.push({ pathname: '/contact-preview', params: { id: hike.id } })} />
         </Card>
       )}
 
@@ -128,16 +121,17 @@ export default function Live() {
           <Body>Send SOS to your trusted contact now?</Body>
           <Body muted>This does not call 112. If you can, call 112 yourself.</Body>
           <Button title="Yes, send SOS" variant="danger" busy={busy}
-            onPress={() => act(async () => { await api.sendSos(hike.id); setConfirmSos(false); })} />
-          <Button title="Cancel" variant="secondary" onPress={() => setConfirmSos(false)} />
+            onPress={() => act(async () => { await api.sendSos(hike.id); logPilot('SOS_CONFIRM'); setConfirmSos(false); })} />
+          <Button title="Cancel" variant="secondary" onPress={() => { logPilot('SOS_CANCEL'); setConfirmSos(false); }} />
         </Card>
       ) : (
-        <Button title="SOS" variant="danger" onPress={() => setConfirmSos(true)} />
+        <Button title="SOS" variant="danger" onPress={() => { logPilot('SOS_OPEN'); setConfirmSos(true); }} />
       )}
 
       <Button title="I'm back safe" busy={busy}
         onPress={() => act(async () => {
           await api.finishHike(hike.id);
+          logPilot('BACK_SAFE');
           if (api === mockApi) mockControls.setScenario('WALKING');
           // Go back to the existing home screen instead of stacking a second copy of it.
           if (router.canDismiss()) router.dismissAll(); else router.replace('/');
@@ -145,13 +139,14 @@ export default function Live() {
 
       <Body muted>HIKE SAFE does not call 112 and cannot guarantee delivery.</Body>
 
-      {api === mockApi && (
+      {/* Hidden for pilot participants; the observer turns it on in Pilot mode. */}
+      {api === mockApi && pilot.showDemoPanel && (
         <Card>
           <Body>Prototype demo: simulate a situation</Body>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {SCENARIOS.map((s) => (
-              <Chip key={s.key} label={s.label} selected={scenario === s.key}
-                onPress={() => { mockControls.setScenario(s.key); setScenario(s.key); }} />
+              <Chip key={s.key} label={s.label} selected={mockControls.scenario === s.key}
+                onPress={() => changeScenario(s.key)} />
             ))}
           </View>
         </Card>
