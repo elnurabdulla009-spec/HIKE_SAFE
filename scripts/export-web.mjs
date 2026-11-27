@@ -4,7 +4,12 @@ import { execSync } from 'node:child_process';
 import { copyFileSync, rmSync, writeFileSync } from 'node:fs';
 
 rmSync('dist', { recursive: true, force: true });
-execSync('npx expo export --platform web', { stdio: 'inherit' });
+// The public demo uses ONLY the mock backend, so it must not contain any
+// Supabase URL or key: ignore .env (EXPO_NO_DOTENV) and unset the variables,
+// and --clear Metro's cache so no old inlined values survive.
+const env = { ...process.env, EXPO_NO_DOTENV: '1' };
+for (const k of Object.keys(env)) if (k.startsWith('EXPO_PUBLIC_')) delete env[k];
+execSync('npx expo export --platform web --clear', { stdio: 'inherit', env });
 
 // GitHub Pages has no file for /HIKE_SAFE/live etc. It serves 404.html instead,
 // so 404.html = the app itself, and expo-router then shows the right screen.
